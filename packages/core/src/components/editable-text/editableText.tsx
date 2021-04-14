@@ -20,7 +20,7 @@ import { polyfill } from "react-lifecycles-compat";
 
 import { AbstractPureComponent2, Classes, Keys } from "../../common";
 import { DISPLAYNAME_PREFIX, IIntentProps, IProps } from "../../common/props";
-import { clamp } from "../../common/utils";
+import { clamp, shallowCompareKeys } from "../../common/utils";
 import { Browser } from "../../compatibility";
 
 export interface IEditableTextProps extends IIntentProps, IProps {
@@ -269,12 +269,24 @@ export class EditableText extends AbstractPureComponent2<IEditableTextProps, IEd
             newState.isEditing = false;
         }
 
-        this.setState(newState);
+        if (!shallowCompareKeys(this.state, newState, { include: Object.keys(newState) })) {
+            this.setState(newState);
+        }
 
         if (this.state.isEditing && !prevState.isEditing) {
             this.props.onEdit?.(this.state.value);
         }
-        this.updateInputDimensions();
+
+        // Updating input dimensions is expensive (due to https://gist.github.com/paulirish/5d52fb081b3570c81e3a),
+        // so we don’t do this if only callbacks changed.
+        // (In the userland, it’s frequent for callback props to change on every rerender. Eg, a lot of developers
+        // use inline functions for callback props: <EditableText onEdit={() => { ... }} />.)
+        const callbackKeys = Object.keys(this.props)
+            .concat(Object.keys(prevProps))
+            .filter(key => key.match(/^on[A-Z]/));
+        if (!shallowCompareKeys(this.props, prevProps, { exclude: callbackKeys })) {
+            this.updateInputDimensions();
+        }
     }
 
     public cancelEditing = () => {
@@ -399,10 +411,13 @@ export class EditableText extends AbstractPureComponent2<IEditableTextProps, IEd
             // IE needs a larger buffer than other browsers.
             scrollWidth += Browser.isInternetExplorer() ? BUFFER_WIDTH_IE : BUFFER_WIDTH_DEFAULT;
 
-            this.setState({
-                inputHeight: scrollHeight,
-                inputWidth: Math.max(scrollWidth, minWidth!),
-            });
+            const inputWidth = Math.max(scrollWidth, minWidth!);
+            if (this.state.inputHeight !== scrollHeight || this.state.inputWidth !== inputWidth) {
+                this.setState({
+                    inputHeight: scrollHeight,
+                    inputWidth: inputWidth,
+                });
+            }
             // synchronizes the ::before pseudo-element's height while editing for Chrome 53
             if (multiline && this.state.isEditing) {
                 this.setTimeout(() => (parentElement!.style.height = `${scrollHeight}px`));
